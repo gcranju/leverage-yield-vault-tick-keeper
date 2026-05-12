@@ -1,0 +1,52 @@
+# Serverless Framework manifest for the Sodax tick keeper.
+#
+# Deploy:
+#   pnpm install
+#   pnpm run build
+#   npx serverless deploy           # uses ~/.aws/credentials
+#
+# Override stage:
+#   npx serverless deploy --stage staging
+#
+# Manual / non-Serverless deployment: see README.md ("Manual zip-and-upload").
+
+service: sodax-tick-keeper
+
+frameworkVersion: ^3
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${env:AWS_REGION, 'us-east-1'}
+  stage: ${opt:stage, 'production'}
+  memorySize: 256
+  timeout: 300  # 5 min — generous; a tick + receipt + solver POST is ~10 s
+  architecture: arm64
+  logRetentionInDays: 30
+
+  environment:
+    PRIVATE_KEY: ${env:PRIVATE_KEY}
+    SONIC_RPC: ${env:SONIC_RPC, 'https://rpc.soniclabs.com'}
+    SOLVER_API_URL: ${env:SOLVER_API_URL, 'https://api.sodax.com'}
+    # VAULTS: ${env:VAULTS, ''}  # uncomment to override the built-in registry
+    NODE_OPTIONS: '--enable-source-maps'
+
+functions:
+  tick:
+    handler: dist/handler.handler
+    description: Calls tick() on every registered LeverageYieldVault when LTV drifts outside tolerance.
+    events:
+      # Schedule cadence. 5 min is the leverage-yield-test default; tune per vault volatility.
+      - schedule: rate(5 minutes)
+
+# Recommended: store PRIVATE_KEY in AWS Secrets Manager and reference via ${ssm:...}
+# instead of the env var. Keeping it as plain env for v1 simplicity — see README.
+
+package:
+  patterns:
+    - dist/**
+    - node_modules/**
+    - '!**/*.ts'
+    - '!**/*.map'
+    - '!**/test/**'
+    - '!**/__tests__/**'

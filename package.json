@@ -1,0 +1,27 @@
+{
+  "name": "sodax-tick-keeper",
+  "version": "0.1.0",
+  "description": "AWS Lambda keeper that calls tick() on Sodax LeverageYieldVaults whenever LTV drifts outside the tolerance band, and notifies the Sodax solver when an intent is created.",
+  "private": true,
+  "type": "module",
+  "main": "dist/handler.js",
+  "scripts": {
+    "build": "tsc",
+    "lint": "tsc --noEmit",
+    "once": "tsx src/handler.ts once",
+    "loop": "tsx src/handler.ts loop",
+    "package": "pnpm run build && cd dist && zip -r ../sodax-tick-keeper.zip . && cd .. && cp -r node_modules sodax-tick-keeper && cd sodax-tick-keeper && zip -ru ../sodax-tick-keeper.zip node_modules && cd .. && rm -rf sodax-tick-keeper",
+    "deploy:sls": "serverless deploy",
+    "clean": "rm -rf dist node_modules sodax-tick-keeper.zip"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
