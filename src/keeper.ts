@@ -60,8 +60,11 @@ export type VaultAssessment = {
 export type TickEventName = 'Leveraged' | 'Deleveraged' | 'Rebalanced' | 'none';
 
 export type TickOutcome =
-  | { kind: 'skipped'; reason: 'within-tolerance' }
+  | { kind: 'skipped'; reason: 'within-tolerance' | 'dry-run' }
+  // `reverted`: tick() simulation failed on-chain (e.g. HF floor) — expected, not paged on.
+  // `errored`:  infrastructure/unexpected failure (RPC down, bad response) — systemic signal.
   | { kind: 'reverted'; error: string }
+  | { kind: 'errored'; error: string }
   | {
       kind: 'ticked';
       txHash: Hash;
@@ -250,9 +253,15 @@ export async function runKeeper(cfg: KeeperConfig): Promise<VaultResult[]> {
         needsRebalance: assessment.needsRebalance,
       });
 
-      const outcome: TickOutcome = assessment.needsRebalance
-        ? await executeTick(vault, cfg, publicClient, walletClient, account)
-        : { kind: 'skipped', reason: 'within-tolerance' };
+      let outcome: TickOutcome;
+      if (!assessment.needsRebalance) {
+        outcome = { kind: 'skipped', reason: 'within-tolerance' };
+      } else if (cfg.dryRun) {
+        // Read-only mode: report that a tick *would* fire, but don't send it.
+        outcome = { kind: 'skipped', reason: 'dry-run' };
+      } else {
+        outcome = await executeTick(vault, cfg, publicClient, walletClient, account);
+      }
 
       log({
         level: outcome.kind === 'reverted' ? 'warn' : 'info',
@@ -280,16 +289,27 @@ export async function runKeeper(cfg: KeeperConfig): Promise<VaultResult[]> {
         deviation: 0n,
         healthFactor: 0n,
         needsRebalance: false,
-        outcome: { kind: 'reverted', error: viemErrorToString(e) },
+        outcome: { kind: 'errored', error: viemErrorToString(e) },
       });
     }
   }
   return results;
 }
 
+/**
+ * Systemic-failure check for the Lambda entry. Returns true only when *every* vault hit an
+ * infrastructure error (`kind: 'errored'` — RPC down, bad response), so the handler can
+ * rethrow and surface a CloudWatch "Errors" invocation. A single vault erroring, or a tick
+ * `reverted` (HF floor, paused — expected), does NOT trip this.
+ */
+export function isSystemicFailure(results: VaultResult[]): boolean {
+  return results.length > 0 && results.every(r => r.outcome.kind === 'errored');
+}
+
 function outcomeToLog(outcome: TickOutcome): Record<string, unknown> {
   if (outcome.kind === 'skipped') return { kind: 'skipped', reason: outcome.reason };
   if (outcome.kind === 'reverted') return { kind: 'reverted', error: outcome.error };
+  if (outcome.kind === 'errored') return { kind: 'errored', error: outcome.error };
   return {
     kind: 'ticked',
     txHash: outcome.txHash,

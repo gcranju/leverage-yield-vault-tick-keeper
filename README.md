@@ -48,7 +48,8 @@ Copy `.env.example` to `.env` and fill in:
 | `SONIC_RPC` | no | `https://rpc.soniclabs.com` | Use a private provider for production cadence. |
 | `SOLVER_API_URL` | no | `https://api.sodax.com` | Set to `https://api.sodax-staging.com` for staging. |
 | `VAULTS` | no | (built-in registry) | Comma-separated addresses to override the registry. Useful for testnet vaults. |
-| `TICK_TIMEOUT_MS` | no | `60000` | Per-vault `waitForTransactionReceipt` timeout. |
+| `TICK_TIMEOUT_MS` | no | `60000` | Per-vault `waitForTransactionReceipt` timeout. Must parse to a positive integer or cold-start throws. |
+| `DRY_RUN` | no | (off) | `1`/`true`/`yes` → assess + log every vault but never send `tick()`. Use for a safe first run. |
 
 To add a production vault, edit `REGISTRY` in [`src/config.ts`](src/config.ts) — keep it
 aligned with `@sodax/types`'s `leverageYieldVaults` constant.
@@ -133,12 +134,25 @@ fields @timestamp, vault, msg, kind, currentLTV, targetLTV, deviation, txHash
 | limit 50
 ```
 
+Per-vault failures are isolated and logged, so a single vault erroring does **not** fail the
+invocation. The handler only rethrows (→ a CloudWatch **Errors** invocation) on a *systemic*
+failure — when **every** vault hits an infrastructure error (`kind: "errored"`, e.g. the RPC
+is down). This distinguishes "the keeper can't run" from "one vault is paused".
+
+Outcome vocabulary in the logs:
+- `kind: "ticked"` — tick sent (see `eventName`, `txHash`).
+- `kind: "skipped"` — `reason: "within-tolerance"` (no-op) or `"dry-run"` (DRY_RUN on).
+- `kind: "reverted"` — `tick()` simulation reverted on-chain (HF floor, paused) — **expected**.
+- `kind: "errored"` — RPC/unexpected failure — **the signal worth investigating**.
+
 Recommended CloudWatch alarms:
-- **Error invocations > 0** in any 15-min window → keeper hard failure (RPC down, key
-  unfunded, vault paused, etc.).
+- **Errors metric > 0** in any 15-min window → systemic failure (all vaults errored, bad config,
+  unfunded/invalid key). Now fires reliably because the handler rethrows on it.
+- **Logs metric filter on `{ $.level = "error" }`** → catches *partial* failures (one vault's RPC
+  blip) that don't fail the invocation. Alarm if sustained across several passes.
 - **Duration > 60 s** → RPC degradation, raise.
 - **`level=warn` count** (filter on `kind = "reverted"`) → tick simulation fails. Investigate
-  whether vault state is stuck (HF too low to lever up).
+  whether vault state is stuck (HF too low to lever up) — low priority, often expected.
 
 ## Operational notes
 
@@ -156,10 +170,15 @@ Recommended CloudWatch alarms:
 ## Testing
 
 No unit tests yet (the logic is mostly RPC + viem calls — best validated with a forked-Sonic
-integration test). For now: run `pnpm run once` against staging and inspect logs.
+integration test). For now, the safe first-run check:
 
-A per-vault dry-run mode (read-only assessment, no tick) could be added behind a `DRY_RUN=1`
-env var if needed.
+```bash
+DRY_RUN=1 pnpm run once    # reads every vault, logs needsRebalance, sends NO transactions
+```
+
+Inspect the `assess` lines — confirm each vault returns sane `targetLTV` / `currentLTV` /
+`deviation` — then drop `DRY_RUN` to go live. The deploy honors `DRY_RUN` too (set it in the
+environment), so you can ship in read-only mode first and flip it off once logs look right.
 
 ## Related
 
