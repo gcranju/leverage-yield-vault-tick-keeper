@@ -20,7 +20,10 @@ provider:
   region: ${env:AWS_REGION, 'us-east-1'}
   stage: ${opt:stage, 'production'}
   memorySize: 256
-  timeout: 300  # 5 min — generous; a tick + receipt + solver POST is ~10 s
+  # Worst case ≈ vaults × TICK_TIMEOUT_MS (2 × 60 s) + a little overhead. 150 s keeps a hung
+  # invocation from lingering long enough to overlap the next 5-min fire (belt-and-braces with
+  # reservedConcurrency: 1 below).
+  timeout: 150
   architecture: arm64
   logRetentionInDays: 30
 
@@ -29,12 +32,17 @@ provider:
     SONIC_RPC: ${env:SONIC_RPC, 'https://rpc.soniclabs.com'}
     SOLVER_API_URL: ${env:SOLVER_API_URL, 'https://api.sodax.com'}
     # VAULTS: ${env:VAULTS, ''}  # uncomment to override the built-in registry
+    TICK_TIMEOUT_MS: ${env:TICK_TIMEOUT_MS, '60000'}
+    DRY_RUN: ${env:DRY_RUN, ''}  # set to 1/true to assess-only (no tick) — safe first run
     NODE_OPTIONS: '--enable-source-maps'
 
 functions:
   tick:
     handler: dist/handler.handler
     description: Calls tick() on every registered LeverageYieldVault when LTV drifts outside tolerance.
+    # One signer (single hot key) → cap to one in-flight invocation so a slow run can't overlap
+    # the next schedule and collide on the account nonce.
+    reservedConcurrency: 1
     events:
       # Schedule cadence. 5 min is the leverage-yield-test default; tune per vault volatility.
       - schedule: rate(5 minutes)

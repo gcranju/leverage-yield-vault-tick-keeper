@@ -8,12 +8,18 @@
 import 'dotenv/config';
 import type { Context, ScheduledEvent, ScheduledHandler } from 'aws-lambda';
 import { loadConfig } from './config.js';
-import { runKeeper } from './keeper.js';
+import { isSystemicFailure, runKeeper } from './keeper.js';
 
 /** AWS Lambda entry. Wire to an EventBridge rule (e.g. `rate(5 minutes)`). */
 export const handler: ScheduledHandler = async (_event: ScheduledEvent, _context: Context) => {
   const cfg = loadConfig();
-  await runKeeper(cfg);
+  const results = await runKeeper(cfg);
+  // Per-vault errors are logged and isolated, so the invocation normally succeeds even when
+  // a vault reverts. But if *every* vault hit an infrastructure error (e.g. RPC outage), fail
+  // the invocation so the CloudWatch "Errors" metric fires instead of staying silently green.
+  if (isSystemicFailure(results)) {
+    throw new Error(`keeper systemic failure: all ${results.length} vault(s) errored`);
+  }
 };
 
 /** Local CLI: `tsx src/handler.ts once|loop [intervalSec]`. */

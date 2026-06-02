@@ -20,8 +20,12 @@ export type LeverageYieldVault = {
 /** Built-in registry. Edit when a new vault is deployed and ready for production keeping. */
 export const REGISTRY: readonly LeverageYieldVault[] = [
   {
-    name: 'weETH-leveraged',
+    name: 'lsodaWEETH',
     address: '0xD09de2f5070699A909c0FD32fb5A909d3886701D',
+  },
+  {
+    name: 'lsodaSTETH',
+    address: '0x136E5D1CEC5db1829E24941Eddd9C8640E02Ce7a',
   },
 ];
 
@@ -31,6 +35,8 @@ export type KeeperConfig = {
   solverApiUrl: string;
   vaults: readonly LeverageYieldVault[];
   tickTimeoutMs: number;
+  /** Read-only mode: assess + log each vault but never send `tick()`. Set via `DRY_RUN`. */
+  dryRun: boolean;
 };
 
 /**
@@ -45,7 +51,14 @@ export function loadConfig(): KeeperConfig {
 
   const sonicRpc = process.env.SONIC_RPC ?? 'https://rpc.soniclabs.com';
   const solverApiUrl = process.env.SOLVER_API_URL ?? 'https://api.sodax.com';
-  const tickTimeoutMs = Number.parseInt(process.env.TICK_TIMEOUT_MS ?? '60000', 10);
+  const rawTimeout = process.env.TICK_TIMEOUT_MS ?? '60000';
+  const tickTimeoutMs = Number.parseInt(rawTimeout, 10);
+  if (!Number.isFinite(tickTimeoutMs) || tickTimeoutMs <= 0) {
+    throw new Error(`TICK_TIMEOUT_MS invalid: ${rawTimeout}`);
+  }
+
+  // Read-only safety switch. Any of 1/true/yes (case-insensitive) enables it.
+  const dryRun = /^(1|true|yes)$/i.test(process.env.DRY_RUN?.trim() ?? '');
 
   // Override path: explicit address allow-list. Names are derived from the position
   // in the list — if you need real names for ad-hoc vaults, add them to REGISTRY instead.
@@ -68,5 +81,6 @@ export function loadConfig(): KeeperConfig {
     solverApiUrl,
     vaults,
     tickTimeoutMs,
+    dryRun,
   };
 }
